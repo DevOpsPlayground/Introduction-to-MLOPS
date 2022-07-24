@@ -1,0 +1,40 @@
+{
+    "AlgorithmSpecification":{
+        "TrainingImage": "204521158369.dkr.ecr.eu-west-1.amazonaws.com/bankmarketing:latest",
+        "TrainingInputMode": "File"
+    },
+    "RoleArn": "arn:aws:iam::204521158369:role/rolename",
+    "OutputDataConfig": {
+        "S3OutputPath": ""
+    },
+    "ResourceConfig": {
+        "InstanceCount": 1,
+        "InstanceType": "ml.m5.xlarge",
+        "VolumeSizeInGB": 30
+    },
+    "TrainingJobName": "",
+    "HyperParameters": {
+        "epochs": "500",
+        "layers": "2",
+        "dense_layer": "64",
+        "batch_size": "8"
+    },
+    "StoppingCondition": {
+        "MaxRuntimeInSeconds": 360000
+    },
+    "InputDataConfig": [
+        {
+            "ChannelName": "training",
+            "DataSource": {
+                "S3DataSource": {
+                    "S3DataType": "S3Prefix",
+                    "S3Uri": "",
+                    "S3DataDistributionType": "FullyReplicated"
+                }
+            },
+            "ContentType": "text/csv",
+            "CompressionType": "None"
+        }
+    ],
+    "Tags": []
+}

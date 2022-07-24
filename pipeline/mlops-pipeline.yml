@@ -1,0 +1,487 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Transform: AWS::Serverless-2016-10-31
+
+Description: "Create a AWS CodePipeline to Operationalize a Machine Learning Model."
+
+Parameters:
+
+  ImageRepoName:
+    Type: String
+    Description: "Name of the ECR repo without the image name."
+    Default: bankmarketing
+
+  ImageTagName:
+    Type: String
+    Description: "Name of the ECR image tag."
+    Default: latest
+
+  ModelName:
+    Type: String
+    Description: "Name of the model."
+    Default: bankmarketing
+
+  RoleName:
+    Type: String
+    Description: "Name of the Pipeline execution Role."
+    Default: MLOps3
+
+Resources:
+
+  CreateModelGroup:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub create-model-group-${ModelName}
+      Description: "Function to create a SageMaker Model Package Group."
+      Handler: lambda.handler
+      MemorySize: 128
+      Role: !GetAtt MLOpsRole.Arn
+      Runtime: python3.8
+      Timeout: 60
+      Environment:
+        Variables:
+          MODEL_NAME: !Ref ModelName
+      CodeUri: ModelGroup/
+      Tags:
+        Name: !Sub create-model-group-${ModelName}
+
+  PackageGroup:
+    Type: Custom::PackageGroup
+    Properties:
+      ServiceToken: !GetAtt CreateModelGroup.Arn
+
+  TrainingLaunchJob:
+    Type: AWS::Serverless::Function
+    Properties: 
+      FunctionName: !Sub training-launch-job-${ModelName}
+      Description: "Function to start a new Sagemaker Training Job."
+      Handler: lambda.handler
+      MemorySize: 128
+      Role: !GetAtt MLOpsRole.Arn
+      Runtime: python3.8
+      Timeout: 60
+      Environment:
+        Variables:
+          PIPELINE_NAME: !Sub ${AWS::StackName}
+          MODEL_NAME: !Ref ModelName
+      CodeUri: TrainingLaunchJob/
+      Tags:
+        Name: !Sub training-launch-job-${ModelName}
+  
+  EtlLaunchJob:
+    Type: AWS::Serverless::Function
+    Properties: 
+      FunctionName: !Sub etl-launch-job-${ModelName}
+      Description: "Function that will start a new Glue ETL Job."
+      Handler: lambda.handler
+      MemorySize: 128
+      Role: !GetAtt MLOpsRole.Arn
+      Runtime: python3.8
+      Timeout: 60
+      Environment:
+        Variables:
+          PIPELINE_NAME: !Sub ${AWS::StackName}
+          MODEL_NAME: !Ref ModelName
+      CodeUri: EtlLaunchJob/
+      Tags:
+        Name: !Sub etl-launch-job-${ModelName}
+  
+  TrainingJobMonitor:
+    Type: AWS::Serverless::Function
+    Properties: 
+      FunctionName: !Sub training-job-monitor-${ModelName}
+      Description: "Function that will monitor that status of the SageMaker Training Job."
+      Handler: lambda.handler
+      MemorySize: 512
+      Role: !GetAtt MLOpsRole.Arn
+      Runtime: python3.8
+      Timeout: 60
+      CodeUri: TrainingJobMonitor/
+      Environment:
+        Variables:
+          PIPELINE_NAME: !Sub ${AWS::StackName}
+          MODEL_NAME: !Ref ModelName
+      Tags:
+        Name: !Sub training-job-monitor-${ModelName}
+  
+  EtlJobMonitor:
+    Type: AWS::Serverless::Function
+    Properties: 
+      FunctionName: !Sub etl-job-monitor-${ModelName}
+      Description: "Function that will monitor that status of the Glue ETL Job."
+      Handler: lambda.handler
+      MemorySize: 512
+      Role: !GetAtt MLOpsRole.Arn
+      Runtime: python3.8
+      Timeout: 60
+      Environment:
+        Variables:
+          PIPELINE_NAME: !Sub ${AWS::StackName}
+          MODEL_NAME: !Ref ModelName
+      CodeUri: EtlJobMonitor/
+      Tags:
+        Name: !Sub etl-job-monitor-${ModelName}
+  
+  TrainingJobMonitorPermissions:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub training-job-monitor-${ModelName}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TrainingJobMonitoringEvent.Arn
+    DependsOn: TrainingJobMonitor
+  
+  EtlJobMonitorPermissions:
+    Type: AWS::Lambda::Permission
+    Properties: 
+      Action: lambda:InvokeFunction
+      FunctionName: !Sub etl-job-monitor-${ModelName}
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EtlJobMonitoringEvent.Arn
+    DependsOn: EtlJobMonitor
+  
+  TrainingJobMonitoringEvent:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event that will monitor the training job and inform codepipeline as it finishes."
+      Name: !Sub training-job-monitor-${ModelName}
+      ScheduleExpression: cron(0/1 * * * ? *)
+      State: DISABLED
+      Targets:
+        - Arn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:training-job-monitor-${ModelName}
+          Id: !Sub training-event-${ModelName}
+    DependsOn: TrainingJobMonitor
+  
+  EtlJobMonitoringEvent:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event that will monitor the gluejob and inform codepipeline as it finishes."
+      Name: !Sub etl-job-monitor-${ModelName}
+      ScheduleExpression: cron(0/1 * * * ? *)
+      State: DISABLED
+      Targets:
+        - Arn: !Sub arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:etl-job-monitor-${ModelName}
+          Id: !Sub etl-event-${ModelName}
+    DependsOn: EtlJobMonitor
+  
+  BuildImageProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub mlops-buildimage-${ModelName}
+      Description: "Build the Model Training and Inference Image."
+      ServiceRole: !GetAtt MLOpsRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: |
+          Version: 0.2
+          phases:
+            install:
+              runtime-versions:
+                python: 3.8
+            pre_build:
+              commands:
+                - printenv
+                - echo Updating Packages ...
+                - pip install --upgrade --force-reinstall botocore boto3 awscli
+            build:
+              Commands:
+                - echo Build started on `date`
+                - echo Logging in to the Amazon Deep Learning Contain Repository ...
+                - aws ecr get-login-password --region eu-west-1 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.eu-west-1.amazonaws.com
+                - echo Building the Container image...
+                - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+                - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+            post_build:
+              commands:
+                - echo Logging in to ECR Repository...
+                - $(aws ecr get-login --no-include-email --region $AWS_DEFAULT_REGION)
+                - echo Pushing the Container image...
+                - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+              finally:
+                - echo Build completed on `date`
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/standard:4.0
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ImageRepoName
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTagName
+          - Name: AWS_ACCOUNT_ID
+            Value: !Sub ${AWS::AccountId}
+          - Name: AWS_DEFAULT_REGION
+            Value: !Sub ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub mlops-buildimage-${ModelName}
+
+  BuildDeploymentProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub mlops-build-deployment-${ModelName}
+      Description: "Builds the required resource properties for the deployment."
+      ServiceRole: !GetAtt MLOpsRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL 
+        Image: aws/codebuild/standard:4.0
+        EnvironmentVariables:
+          - Name: PIPELINE_NAME
+            Value: !Sub ${AWS::StackName}
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ImageRepoName
+          - Name: MODEL_NAME
+            Value: !Ref ModelName
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTagName
+          - Name: MODEL_GROUP
+            Value: !GetAtt PackageGroup.Name
+      Tags:
+        - Key: Name
+          Value: !Sub mlops-build-deployment-${ModelName}
+  
+  BuildWorkflowProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub mlops-buildworkflow-${ModelName}
+      Description: "Create Step Functions Workflow for System Test."
+      ServiceRole: !GetAtt MLOpsRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/standard:4.0
+        PrivilegedMode: True
+        EnvironmentVariables:
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ImageRepoName
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTagName
+          - Name: MODEL_NAME
+            Value: !Ref ModelName
+          - Name: PIPELINE_BUCKET
+            Value: !Sub mlops-${AWS::Region}-${ModelName}
+          - Name: WORKFLOW_NAME
+            Value: !Sub ${AWS::StackName}-systemtest
+          - Name: PIPELINE_NAME
+            Value: !Sub ${AWS::StackName}
+          - Name: MODEL_GROUP
+            Value: !GetAtt PackageGroup.Name
+      Tags:
+        - Key: Name
+          Value: !Sub mlops-buildworkflow-${ModelName}
+
+  MLOpsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref RoleName
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service:
+                - "s3.amazonaws.com"
+                - "cloudformation.amazonaws.com"
+                - "events.amazonaws.com"
+                - "glue.amazonaws.com"
+                - "lambda.amazonaws.com"
+                - "sagemaker.amazonaws.com"
+                - "codebuild.amazonaws.com"
+                - "codepipeline.amazonaws.com"
+                - "states.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "MLOpsPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: "CodeCommitAccess"
+                Effect: "Allow"
+                Action:
+                  - "codecommit:GetBranch"
+                  - "codecommit:GetCommit"
+                  - "codecommit:UploadArchive"
+                  - "codecommit:GetUploadArchiveStatus"
+                  - "codecommit:CancelUploadArchive"
+                Resource:
+                  - "arn:aws:codecommit:eu-west-1:*:mlops"
+              - Sid: "UploadImage"
+                Effect: "Allow"
+                Action: "ecr:*"
+                Resource: "*"
+              - Sid: "ECRAuthorizationToken"
+                Effect: "Allow"
+                Action:
+                  - "ecr:GetAuthorizationToken"
+                Resource: "*"
+              - Sid: "CloudWatchMetrics"
+                Effect: "Allow"
+                Action:
+                  - "cloudwatch:PutMetricData"
+                  - "cloudwatch:GetMetricData"
+                  - "cloudwatch:GetMetricStatistics"
+                  - "cloudwatch:ListMetrics"
+                  - "cloudwatch:PutMetricAlarm"
+                  - "cloudwatch:DeleteAlarms"
+                  - "cloudwatch:DescribeAlarms"
+                Resource: "*"
+              - Sid: "CloudWatchLogs"
+                Effect: "Allow"
+                Action:
+                  - "logs:CreateLogGroup"
+                  - "logs:CreateLogStream"
+                  - "logs:DescribeLogStreams"
+                  - "logs:PutLogEvents"
+                  - "logs:GetLogEvents"
+                Resource: "*"
+              - Sid: "BucketAccess"
+                Effect: "Allow"
+                Action:
+                  - "s3:*"
+                Resource:
+                  - "arn:aws:s3:::data-eu-west-1*"
+                  - "arn:aws:s3:::data-eu-west-1*/*"
+                  - "arn:aws:s3:::mlops-eu-west-1*"
+                  - "arn:aws:s3:::mlops-eu-west-1*/*"
+              - Sid: "CloudFormationAccess"
+                Effect: "Allow"
+                Action:
+                  - "cloudformation:Create*"
+                  - "cloudformation:Delete*"
+                  - "cloudformation:Describe*"
+                  - "cloudformation:Update*"
+                  - "cloudformation:List*"
+                  - "cloudformation:ExecuteChangeSet"
+                  - "cloudformation:GetTemplateSummary"
+                Resource:
+                  - "arn:aws:cloudformation:eu-west-1:*:stack/*-pipeline*/*"
+                  - "arn:aws:cloudformation:eu-west-1:aws:transform/Serverless-2016-10-31"
+              - Sid: "CloudWatchEventsAccess"
+                Effect: "Allow"
+                Action:
+                  - "events:*"
+                Resource: "*"
+              - Sid: "CodeBuildImageAccess"
+                Effect: "Allow"
+                Action:
+                  - "codebuild:*"
+                Resource:
+                  - "arn:aws:codebuild:eu-west-1:*:project/mlops-buildimage-*"
+                  - "arn:aws:codebuild:eu-west-1:*:project/mlops-bankmarketing-custom-reources-*"
+                  - "arn:aws:codebuild:eu-west-1:*:project/mlops-buildworkflow-*"
+                  - "arn:aws:codebuild:eu-west-1:*:project/mlops-build-deployment-*"
+              - Sid: "GlueJobResourceAccess"
+                Effect: "Allow"
+                Action:
+                  - "glue:*"
+                Resource:
+                  - "arn:aws:glue:eu-west-1:*:job/*"
+              - Sid: "LambdaResourceAccess"
+                Effect: "Allow"
+                Action:
+                  - "lambda:*"
+                Resource:
+                  - "arn:aws:lambda:eu-west-1:*:function:training-launch-job-*"
+                  - "arn:aws:lambda:eu-west-1:*:function:training-job-monitor-*"
+                  - "arn:aws:lambda:eu-west-1:*:function:etl-launch-job-*"
+                  - "arn:aws:lambda:eu-west-1:*:function:etl-job-monitor-*"
+                  - "arn:aws:lambda:eu-west-1:*:function:*-systemtest-*"
+                  - "arn:aws:lambda:eu-west-1:*:function:*-EvaluateEndpointLambda*"
+                  - "arn:aws:lambda:eu-west-1:*:function:*-RegisterModelLambda*"
+                  - "arn:aws:lambda:eu-west-1:*:function:create-model-group-*"
+              - Sid: "SageMakerFullAccess"
+                Effect: "Allow"
+                Action:
+                  - "sagemaker:*"
+                Resource: "*"
+              - Sid: "MLOpsPassRole"
+                Effect: "Allow"
+                Action:
+                  - "iam:PassRole"
+                Resource:
+                  - arn:aws:iam::*:role/MLOps
+                  - !Sub arn:aws:iam::*:role/${RoleName}
+                  - !Sub arn:aws:iam::*:role/*${ModelName}-*WorkflowRole
+              - Sid: "WorkflowRole"
+                Effect: "Allow"
+                Action:
+                  - "iam:GetRole"
+                  - "iam:GetRolePolicy"
+                  - "iam:PutRolePolicy"
+                  - "iam:CreateRole"
+                  - "iam:DeleteRole"
+                  - "iam:AttachRolePolicy"
+                  - "iam:DetachRolePolicy"
+                  - "iam:DeleteRolePolicy"
+                Resource:
+                  - !Sub arn:aws:iam::*:role/${ModelName}-*WorkflowRole
+              - Sid: "WorkflowSSM"
+                Effect: "Allow"
+                Action:
+                  - "ssm:PutParameter"
+                  - "ssm:DeleteParameter"
+                  - "ssm:AddTagsToResource"
+                  - "ssm:GetParameter"
+                Resource:
+                  - "arn:aws:ssm:eu-west-1:*:parameter/*WorkflowExecRole*"
+                  - "arn:aws:ssm:eu-west-1:*:parameter/*EvaluateEndpoint*"
+                  - "arn:aws:ssm:eu-west-1:*:parameter/*RegisterModel*"
+              - Sid: "StepFunctionsAccess"
+                Effect: "Allow"
+                Action:
+                  - "states:ListStateMachines"
+                  - "states:CreateStateMachine"
+                  - "states:UpdateStateMachine"
+                  - "states:DeleteStateMachine"
+                  - "states:DescribeStateMachine"
+                  - "states:StartExecution"
+                  - "states:DescribeExecution"
+                Resource:
+                  - "arn:aws:states:eu-west-1:*:stateMachine:*"
+                  - "arn:aws:states:eu-west-1:*:execution:*-systemtest:*"
+              - Sid: "AutoscalingServiceLinkedRole"
+                Effect: "Allow"
+                Action:
+                  - "iam:CreateServiceLinkedRole"
+                Resource:
+                  - "arn:aws:iam::*:role/aws-service-role/sagemaker.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_SageMakerEndpoint"
+                Condition:
+                  StringLike:
+                    "iam:AWSServiceName": "sagemaker.application-autoscaling.amazonaws.com"
+              - Sid: "CodePipelineAccess"
+                Action:
+                  - "codepipeline:PutJobFailureResult"
+                  - "codepipeline:PutJobSuccessResult"
+                  - "codepipeline:GetPipelineState"
+                  - "codepipeline:PutApprovalResult"
+                Effect: "Allow"
+                Resource: "*"
+              - Sid: "EndpointAutoScaling"
+                Action:
+                  - "application-autoscaling:DescribeScalableTargets"
+                  - "application-autoscaling:RegisterScalableTarget"
+                  - "application-autoscaling:DescribeScalableTargets"
+                  - "application-autoscaling:DeregisterScalableTarget"
+                  - "application-autoscaling:PutScalingPolicy"
+                  - "application-autoscaling:DescribeScalingPolicies"
+                  - "application-autoscaling:DescribeScalingActivities"
+                  - "application-autoscaling:DeleteScalingPolicy"
+                  - "application-autoscaling:DeleteScheduledAction"
+                Effect: "Allow"
+                Resource: "*"
