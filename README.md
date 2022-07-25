@@ -59,3 +59,9 @@ Contains the code to perform automated System Tests once the model has been depl
 ## Steps to Create MLOps Pipeline
 We will be working to create and deploy below architecture. Navigate to [Steps for MLOps Pipeline](Steps-to-Follow.md) to start with building your first MLOps pipeline.
 ![](readme-images/architecture.png)
+
+## References
+- Amazon SageMaker: https://docs.aws.amazon.com/sagemaker/latest/dg/whatis.html
+- Amazon SageMaker Model Package Group: https://docs.aws.amazon.com/sagemaker/latest/dg/model-registry-model-group.html
+- Amazon SageMaker Monitoring: https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor-byoc-statistics.html 
+- Amazon SageMaker Monitoring Statistics: https://docs.aws.amazon.com/sagemaker/latest/dg/model-monitor-byoc-statistics.html
