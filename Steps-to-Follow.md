@@ -21,7 +21,7 @@ git clone https://github.com/DevOpsPlayground/Introduction-to-MLOPS.git
 4.	Copy the contents under the header "Parameters required for Hands-on Exercise" of the file and run-on terminal
 5.	After the commands are executed successfully, run the below command:
     ```
-    cd ~/environment/Introduction-to-MLOPS/
+    cd ~/workdir/Introduction-to-MLOPS/
     bash env-setup.sh
     ```
 6.	Create an ECR repository with name bankmarketing-{modelname}
