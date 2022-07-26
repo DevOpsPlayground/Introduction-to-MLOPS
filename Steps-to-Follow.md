@@ -262,7 +262,7 @@ git clone https://github.com/DevOpsPlayground/Introduction-to-MLOPS.git
 2.	Replace `{ModelName}` with the Model Name used in the exercise
 3.	On terminal run the below command
     ```
-    cd ~/environment/Introduction-to-MLOPS/utils
+    cd ~/workdir/Introduction-to-MLOPS/utils
     python3 prod_load.py
     ```
 4.	Navigate to Amazon SageMaker --> Inference --> Endpoints
