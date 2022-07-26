@@ -53,7 +53,7 @@ git clone https://github.com/DevOpsPlayground/Introduction-to-MLOPS.git
     _The command with replaced model names can be found in helper-cmds.sh_
     ```
     aws cloudformation create-stack --stack-name bankmarketing-pipeline-{ModelName} \
-    --template-body file://~/environment/Introduction-to-MLOPS/pipeline/mlops-pipeline-output.yml \
+    --template-body file://~/workdir/Introduction-to-MLOPS/pipeline/mlops-pipeline-output.yml \
     --parameters $(printf "$parameters" "bankmarketing-{ModelName}" "latest" "{ModelName}" "{ModelName}") \
     --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
     ```
