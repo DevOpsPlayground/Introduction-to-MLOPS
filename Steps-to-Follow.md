@@ -27,7 +27,7 @@ git clone https://github.com/DevOpsPlayground/Introduction-to-MLOPS.git
 6.	Create an ECR repository with name bankmarketing-{modelname}
 7.	Run the below command to check if all the resources are created successfully.
     ```
-    cd ~/environment/Introduction-to-MLOPS/utils
+    cd ~/workdir/Introduction-to-MLOPS/utils
     python3 validate_resource.py
     ```
 
@@ -43,7 +43,7 @@ git clone https://github.com/DevOpsPlayground/Introduction-to-MLOPS.git
 2.	Run below command to upload lambda functions to s3 bucket and replace local references in CloudFormation template
     _The command with replaced model names can be found in helper-cmds.sh_
     ```
-    cd ~/environment/Introduction-to-MLOPS/pipeline 
+    cd ~/workdir/Introduction-to-MLOPS/pipeline 
     aws cloudformation package --template-file mlops-pipeline.yml \
     --s3-bucket $PIPELINE_BUCKET \
     --s3-prefix bankmarketing-pipeline-{ModelName}/artifacts \
