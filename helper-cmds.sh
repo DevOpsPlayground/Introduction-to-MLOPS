@@ -27,7 +27,7 @@ echo "export MODEL_NAME=$MODEL_NAME" >> ~/.bashrc
 #############    replace the local references in CloudFormation ################
 #############    template.                                      ################
 ################################################################################
-cd ~/environment/Introduction-to-MLOPS/pipeline
+cd ~/workdir/Introduction-to-MLOPS/pipeline
 aws cloudformation package --template-file mlops-pipeline.yml \
 --s3-bucket $PIPELINE_BUCKET \
 --s3-prefix bankmarketing-pipeline-{ModelName}/artifacts \
@@ -38,6 +38,6 @@ aws cloudformation package --template-file mlops-pipeline.yml \
 ############# Command to create the CloudFormation stack        ################
 ################################################################################
 aws cloudformation create-stack --stack-name bankmarketing-pipeline-{ModelName} \
---template-body file://~/environment/Introduction-to-MLOPS/pipeline/mlops-pipeline-output.yml \
+--template-body file://~/workdir/Introduction-to-MLOPS/pipeline/mlops-pipeline-output.yml \
 --parameters $(printf "$parameters" "bankmarketing-{ModelName}" "latest" "{ModelName}" "{ModelName}") \
 --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND
